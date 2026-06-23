@@ -153,6 +153,32 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
+# Step 4.5: Benchmark GPU vs CPU transcription speed
+# ══════════════════════════════════════════════════════════════════════
+log_info "Step 4.5/7: Benchmarking GPU vs CPU transcription speed..."
+
+BENCH_WAV="/tmp/pi_ptt_bench.wav"
+"$FFMPEG_PATH" -y -f lavfi -i "sine=frequency=440:duration=3" -ar 16000 -ac 1 -vn "$BENCH_WAV" -loglevel error
+
+START=$(date +%s)
+"$WHISPER_BIN" -m "$MODEL_PATH" -f "$BENCH_WAV" --no-timestamps -np >/dev/null 2>>/tmp/pi_ptt_debug.log
+GPU_TIME=$(( $(date +%s) - START ))
+
+START=$(date +%s)
+"$WHISPER_BIN" -ng -m "$MODEL_PATH" -f "$BENCH_WAV" --no-timestamps -np >/dev/null 2>>/tmp/pi_ptt_debug.log
+CPU_TIME=$(( $(date +%s) - START ))
+
+rm -f "$BENCH_WAV"
+
+if [ "$CPU_TIME" -lt "$GPU_TIME" ]; then
+    GPU_FLAG="-ng "
+    log_ok "CPU is faster on this Mac (GPU: ${GPU_TIME}s, CPU: ${CPU_TIME}s) — using CPU-only mode"
+else
+    GPU_FLAG=""
+    log_ok "GPU is faster on this Mac (GPU: ${GPU_TIME}s, CPU: ${CPU_TIME}s) — using GPU acceleration"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
 # Step 5: Create PTT scripts
 # ══════════════════════════════════════════════════════════════════════
 log_info "Step 5/7: Creating PTT scripts..."
@@ -207,7 +233,7 @@ else
 fi
 
 if [ -x "$WHISPER_BIN" ] && [ -f "$MODEL" ]; then
-    "$WHISPER_BIN" -m "$MODEL" -f "$OUT" --no-timestamps > "$TRANSCRIPT" 2>>"$LOG"
+    "$WHISPER_BIN" __GPU_FLAG__-m "$MODEL" -f "$OUT" --no-timestamps > "$TRANSCRIPT" 2>>"$LOG"
     echo "TRANSCRIBED: $(wc -c < "$TRANSCRIPT") bytes" >> "$LOG"
     sed '/^[[:space:]]*$/d' "$TRANSCRIPT" | /usr/bin/pbcopy
 else
@@ -221,6 +247,7 @@ STOPEOF
 sed -i '' "s|__FFMPEG_PATH__|$FFMPEG_PATH|g" "$BIN_DIR/pi-ptt-start.sh"
 sed -i '' "s|__MODEL_PATH__|$MODEL_PATH|g" "$BIN_DIR/pi-ptt-stop-and-transcribe.sh"
 sed -i '' "s|__WHISPER_BIN__|$WHISPER_BIN|g" "$BIN_DIR/pi-ptt-stop-and-transcribe.sh"
+sed -i '' "s|__GPU_FLAG__|$GPU_FLAG|g" "$BIN_DIR/pi-ptt-stop-and-transcribe.sh"
 
 chmod +x "$BIN_DIR/pi-ptt-start.sh" "$BIN_DIR/pi-ptt-stop-and-transcribe.sh"
 
