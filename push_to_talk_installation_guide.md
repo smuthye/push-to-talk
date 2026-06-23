@@ -191,6 +191,18 @@ echo "STARTED $PID" >> "$LOG"
 
 ### 5b — Stop + transcribe script: `~/bin/pi-ptt-stop-and-transcribe.sh`
 
+**First, check whether GPU or CPU is faster on your Mac.** whisper.cpp defaults to Metal GPU acceleration, which is great on Apple Silicon but can be *slower* than CPU on older Intel Macs with weak integrated graphics:
+
+```bash
+# GPU (default)
+time ~/whisper.cpp/build/bin/whisper-cli -m ~/whisper.cpp/models/ggml-small.bin -f /tmp/pi_ptt.wav --no-timestamps
+
+# CPU-only
+time ~/whisper.cpp/build/bin/whisper-cli -ng -m ~/whisper.cpp/models/ggml-small.bin -f /tmp/pi_ptt.wav --no-timestamps
+```
+
+Compare the `total` time. If CPU (`-ng`) is faster, add `-ng` to the `whisper-cli` line below. The `install_ptt.sh` script automates this benchmark and picks the faster backend for you.
+
 ```bash
 #!/usr/bin/env bash
 LOG="/tmp/pi_ptt_debug.log"
@@ -219,7 +231,7 @@ else
 fi
 
 if [ -x "$WHISPER_BIN" ] && [ -f "$MODEL" ]; then
-    "$WHISPER_BIN" -m "$MODEL" -f "$OUT" --no-timestamps > "$TRANSCRIPT" 2>>"$LOG"
+    "$WHISPER_BIN" -m "$MODEL" -f "$OUT" --no-timestamps > "$TRANSCRIPT" 2>>"$LOG"  # add -ng before -m if CPU was faster in your benchmark above
     echo "TRANSCRIBED: $(wc -c < "$TRANSCRIPT") bytes" >> "$LOG"
     sed '/^[[:space:]]*$/d' "$TRANSCRIPT" | /usr/bin/pbcopy
 else
@@ -234,6 +246,7 @@ echo "DONE $(date)" >> "$LOG"
 | Variable | What to change |
 |----------|---------------|
 | `MODEL` | Path to your downloaded model (change `ggml-small.bin` if you chose a different model) |
+| `-ng` flag | Add right before `-m` if your benchmark above showed CPU is faster than GPU on your Mac |
 
 ### 5c — Make both scripts executable
 
@@ -711,7 +724,7 @@ tail -30 /tmp/pi_ptt_debug.log
 ### Problem: Transcript is empty or garbage
 
 - Ensure wav file has reasonable size: `ls -lh /tmp/pi_ptt.wav` (should be >10 KB for a few seconds)
-- Test whisper manually: `~/whisper.cpp/build/bin/whisper-cli -m ~/whisper.cpp/models/ggml-small.bin -f /tmp/pi_ptt.wav --no-timestamps`
+- Test whisper manually: `~/whisper.cpp/build/bin/whisper-cli -m ~/whisper.cpp/models/ggml-small.bin -f /tmp/pi_ptt.wav --no-timestamps` (add `-ng` for CPU-only if that benchmarked faster — see [Step 5b](#5b--stop--transcribe-script-binpi-ptt-stop-and-transcribesh))
 - Try a larger model for better accuracy
 
 ### Problem: Hammerspoon hangs or freezes
@@ -726,6 +739,11 @@ open -a Hammerspoon
 **Why it might hang:**
 - Long recording + transcription blocking the main thread. Keep recordings under 30s with `small` model.
 - If it keeps hanging, ensure your `init.lua` uses `os.execute` (not `hs.task`) — the version in Step 8 above is the stable implementation.
+- **Slow/old integrated GPU:** whisper.cpp defaults to Metal GPU acceleration. On older Intel Macs (e.g. Iris Plus Graphics), Metal is often *slower* than the CPU path — a 1-second clip can take 25-30+ seconds, which looks identical to a true hang since `os.execute` blocks Hammerspoon's main thread the whole time. Check `tail -5 /tmp/pi_ptt_debug.log` for `whisper_print_timings: total time`; if it's far higher than expected, force CPU-only inference by adding `-ng` (`--no-gpu`) to the `whisper-cli` invocation in `pi-ptt-stop-and-transcribe.sh`:
+  ```bash
+  "$WHISPER_BIN" -ng -m "$MODEL" -f "$OUT" --no-timestamps > "$TRANSCRIPT" 2>>"$LOG"
+  ```
+  On weak iGPUs this typically cuts transcription time by ~10x. `install_ptt.sh` runs this GPU-vs-CPU benchmark automatically (Step 4.5) and picks the faster backend, so a fresh `./install_ptt.sh` run already handles this — this manual fix is only needed if you're hand-editing an existing install.
 
 ### Problem: ffmpeg records silence (wav file tiny/empty)
 
